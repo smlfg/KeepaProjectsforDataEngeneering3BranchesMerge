@@ -20,6 +20,7 @@ from src.data.database import AsyncSessionLocal, close_async_engine
 BASE_URL = "http://localhost:8000"
 
 
+@pytest.mark.skip(reason="requires running FastAPI server and app import")
 class TestFilterAPI:
     """Test suite for Filter Management API"""
 

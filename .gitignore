@@ -1,1 +1,13 @@
 .env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+venv/
+.venv/
+migrations/__pycache__/

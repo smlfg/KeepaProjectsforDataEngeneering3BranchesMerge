@@ -4,18 +4,22 @@ Uses APScheduler for robust cron-based scheduling
 """
 
 import asyncio
+import csv
+import json
 import logging
 import signal
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.executors.asyncio import AsyncIOExecutor
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,9 +28,11 @@ from src.config import get_settings
 from src.data.database import AsyncSessionLocal
 from src.data.repositories import FilterRepository, ReportRepository, UserRepository
 from src.services.keepa_client import get_keepa_client
+from src.services.keepa_client import KeepaRateLimitError, NoDealAccessError
 from src.services.deal_scoring import get_deal_scoring_service
 from src.services.report_generator import get_report_generator
 from src.services.email_sender import get_email_sender
+from src.services.elasticsearch_service import get_elasticsearch_service
 
 
 # Configure logging
@@ -52,6 +58,7 @@ class DealOrchestrator:
         self.scoring_service = get_deal_scoring_service()
         self.report_generator = get_report_generator()
         self.email_sender = get_email_sender()
+        self.elasticsearch_service = get_elasticsearch_service()
 
         # Stats tracking
         self.stats = {
@@ -71,7 +78,7 @@ class DealOrchestrator:
             "deals_found": 0,
             "emails_sent": 0,
             "errors": 0,
-            "start_time": datetime.utcnow().isoformat(),
+            "start_time": datetime.now(timezone.utc).isoformat(),
             "end_time": None,
         }
 
@@ -111,7 +118,7 @@ class DealOrchestrator:
             self.stats["errors"] += 1
 
         finally:
-            self.stats["end_time"] = datetime.utcnow().isoformat()
+            self.stats["end_time"] = datetime.now(timezone.utc).isoformat()
 
         # Log final stats
         duration = (
@@ -216,7 +223,7 @@ class DealOrchestrator:
                 return result
 
             # Step 5: Send email
-            today = datetime.utcnow().strftime("%d.%m.%Y")
+            today = datetime.now(timezone.utc).strftime("%d.%m.%Y")
             subject = f"🔥 {filter_obj.name} - {today}"
 
             email_result = await self.email_sender.send_report(
@@ -304,6 +311,462 @@ class DealOrchestrator:
 ╚══════════════════════════════════════════════════════╝
         """)
 
+    # ── Bad-ASIN quarantine (in-memory, reset on restart) ────────────────────
+    _quarantine: set = set()
+
+    @staticmethod
+    def _detect_layout(title: str, domain: str) -> str:
+        """Detect keyboard layout from title + market context."""
+        t = (title or "").lower()
+        # Explicit layout signals (highest confidence)
+        if any(
+            kw in t
+            for kw in ["qwertz", "deutsch", "german layout", "layout de", "de layout"]
+        ):
+            return "QWERTZ"
+        if any(
+            kw in t
+            for kw in ["azerty", "français", "french layout", "layout fr", "fr layout"]
+        ):
+            return "AZERTY"
+        if any(
+            kw in t
+            for kw in ["ch layout", "swiss layout", "schweizer", "suisse", "svizzera"]
+        ):
+            return "CH"
+        if any(
+            kw in t
+            for kw in ["nordic", "scandinavian", "no layout", "se layout", "dk layout"]
+        ):
+            return "Nordic"
+        if any(
+            kw in t
+            for kw in [
+                "uk layout",
+                "us layout",
+                "english layout",
+                "international",
+                "iso uk",
+            ]
+        ):
+            return "QWERTY-UK"
+        if any(kw in t for kw in ["italiano", "layout it", "it layout"]):
+            return "QWERTY-IT"
+        if any(kw in t for kw in ["español", "layout es", "es layout"]):
+            return "QWERTY-ES"
+        # Market-based fallback (lower confidence)
+        market_defaults = {
+            "DE": "QWERTZ",
+            "AT": "QWERTZ",
+            "CH": "CH",
+            "FR": "AZERTY",
+            "IT": "QWERTY-IT",
+            "ES": "QWERTY-ES",
+            "UK": "QWERTY-UK",
+            "NL": "QWERTY-NL",
+        }
+        return market_defaults.get(domain, "Unknown")
+
+    def _load_targets(self) -> list[dict]:
+        """
+        Load domain-specific targets. Priority:
+          1. DEAL_TARGETS_FILE CSV  (asin,domain_id,market columns)
+          2. DEAL_SEED_ASINS env   (comma-separated ASINs → expanded to all 4 EU domains)
+          3. DEAL_SEED_FILE JSON   (by_domain format → expanded to target list)
+          4. hardcoded minimal defaults
+        Returns list of {"asin": str, "domain_id": int, "market": str}
+        """
+        DOMAIN_EU = {"UK": 2, "DE": 3, "FR": 4, "IT": 8, "ES": 9, "AT": 16}
+        settings = get_settings()
+        root = Path(__file__).parent.parent.parent
+
+        # Priority 1 – CSV targets file (domain-aware)
+        csv_path = root / settings.deal_targets_file
+        if csv_path.exists():
+            try:
+                targets = []
+                validated_targets = []
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    fieldnames = {str(x).strip() for x in (reader.fieldnames or [])}
+                    has_metadata_columns = any(
+                        col in fieldnames
+                        for col in (
+                            "title",
+                            "new_price",
+                            "used_price",
+                            "list_price",
+                            "deal_price",
+                            "discount_percent",
+                            "validated_at",
+                        )
+                    )
+
+                    for row in reader:
+                        asin = (row.get("asin") or "").strip()
+                        domain_id = int(row.get("domain_id") or 0)
+                        market = (row.get("market") or row.get("domain") or "").strip()
+                        if asin and domain_id:
+                            target = {
+                                "asin": asin,
+                                "domain_id": domain_id,
+                                "market": market,
+                            }
+                            targets.append(target)
+
+                            title = (row.get("title") or "").strip()
+                            has_price = any(
+                                (row.get(k) or "").strip()
+                                for k in (
+                                    "new_price",
+                                    "used_price",
+                                    "list_price",
+                                    "deal_price",
+                                )
+                            )
+                            if title or has_price:
+                                validated_targets.append(target)
+
+                if validated_targets:
+                    logger.info(
+                        f"🎯 Seed source: {settings.deal_targets_file} "
+                        f"({len(validated_targets)} validated targets)"
+                    )
+                    return validated_targets
+
+                # If metadata columns exist but no row has title/price, treat file as raw/unvalidated.
+                if targets and has_metadata_columns:
+                    logger.warning(
+                        f"⚠️  Ignoring raw target file {settings.deal_targets_file}: "
+                        f"{len(targets)} rows but no validated title/price metadata."
+                    )
+                elif targets:
+                    logger.info(
+                        f"🎯 Seed source: {settings.deal_targets_file} ({len(targets)} targets)"
+                    )
+                    return targets
+            except Exception as e:
+                logger.warning(f"Could not read targets CSV: {e}")
+
+        # Priority 2 – DEAL_SEED_ASINS env (expand to all 4 domains)
+        if settings.deal_seed_asins:
+            asins = [
+                a.strip() for a in settings.deal_seed_asins.split(",") if a.strip()
+            ]
+            if asins:
+                targets = [
+                    {"asin": a, "domain_id": did, "market": m}
+                    for m, did in DOMAIN_EU.items()
+                    for a in asins
+                ]
+                logger.info(
+                    f"🌱 Seed source: DEAL_SEED_ASINS env ({len(targets)} targets across 4 domains)"
+                )
+                return targets
+
+        # Priority 3 – JSON seed file
+        json_path = root / settings.deal_seed_file
+        if not json_path.exists():
+            json_path = root / "data" / "seed_asins_eu_qwertz.json"
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text())
+                by_domain = data.get("by_domain", {})
+                targets = []
+                for market, entries in by_domain.items():
+                    did = DOMAIN_EU.get(market, 0)
+                    if not did:
+                        continue
+                    for entry in entries or []:
+                        asin = entry.get("asin") if isinstance(entry, dict) else entry
+                        if asin:
+                            targets.append(
+                                {"asin": asin, "domain_id": did, "market": market}
+                            )
+                if targets:
+                    logger.info(
+                        f"🌱 Seed source: {json_path.name} ({len(targets)} targets)"
+                    )
+                    return targets
+            except Exception as e:
+                logger.warning(f"Could not read seed JSON: {e}")
+
+        # Priority 4 – hardcoded minimal defaults
+        logger.warning(
+            "🌱 Seed source: hardcoded defaults — run discovery script to improve"
+        )
+        defaults = ["B01NABDNPH", "B014EUQOGK", "B01E8KO2B0"]
+        return [
+            {"asin": a, "domain_id": did, "market": m}
+            for m, did in DOMAIN_EU.items()
+            for a in defaults
+        ]
+
+    async def _collect_to_elasticsearch(self):
+        """
+        Collect deals and index them to Elasticsearch (product_only mode).
+        Interval: DEAL_SCAN_INTERVAL_SECONDS (default 300s)
+        Batch:    DEAL_SCAN_BATCH_SIZE (default 50 ASINs per call)
+        """
+        logger.info("📊 Starting deal collection job (product_only)")
+        start_time = datetime.now(timezone.utc)
+
+        settings = get_settings()
+        batch_size = settings.deal_scan_batch_size
+        DOMAIN_NAMES = {2: "UK", 3: "DE", 4: "FR", 8: "IT", 9: "ES", 14: "NL", 16: "AT"}
+        KEYBOARD_KEYWORDS = [
+            "tastatur",  # DE
+            "clavier",  # FR
+            "tastiera",  # IT
+            "teclado",  # ES
+            "toetsenbord",  # NL
+            "klawiatura",  # PL
+            "keyboard",  # EN (allgemein)
+            "qwertz",  # Layout DE/AT/CH — wichtigstes Signal
+            "azerty",  # Layout FR/BE
+            "mechanisch",  # DE mechanisch
+            "mechanical",  # EN mechanical
+            "gaming tastatur",
+            "gaming keyboard",
+            "keychron",  # Brand: meist QWERTZ/ISO verfügbar
+            "ducky",  # Brand: QWERTZ-Varianten verfügbar
+            "anne pro",  # Brand: QWERTZ-Varianten verfügbar
+            # ENTFERNT: "qwerty" (matcht EN/ES-Layouts → False Positives)
+            # ENTFERNT: "cherry", "razer", "logitech k", "corsair k" (layout-agnostisch)
+        ]
+
+        targets = self._load_targets()
+        if not targets:
+            logger.warning("No targets — skipping. Run discovery script first.")
+            return
+
+        # Group by domain_id for batched API calls
+        targets_by_domain: dict[int, list[str]] = {}
+        for t in targets:
+            did = t["domain_id"]
+            if t["asin"] not in self._quarantine:
+                targets_by_domain.setdefault(did, [])
+                targets_by_domain[did].append(t["asin"])
+
+        total_targets = sum(len(v) for v in targets_by_domain.values())
+        logger.info(f"   targets={total_targets} batch_size={batch_size}")
+
+        try:
+            all_deals: list[dict] = []
+            asins_processed = 0
+
+            for domain_id, asins in targets_by_domain.items():
+                domain_name = DOMAIN_NAMES.get(domain_id, str(domain_id))
+                if not asins:
+                    continue
+
+                for i in range(0, len(asins), batch_size):
+                    batch = asins[i : i + batch_size]
+                    asins_processed += len(batch)
+                    try:
+                        deals = await self.keepa_client.get_products_with_deals(
+                            asins=batch,
+                            domain_id=domain_id,
+                            min_discount=10,
+                        )
+                        for d in deals:
+                            d["layout"] = self._detect_layout(
+                                d.get("title", ""), d.get("domain", "")
+                            )
+                        all_deals.extend(deals)
+                        if deals:
+                            logger.info(
+                                f"  → {domain_name}: {len(deals)} deals "
+                                f"from {len(batch)} ASINs"
+                            )
+                    except NoDealAccessError as e:
+                        logger.error(f"API plan limitation: {e}")
+                        return
+                    except KeepaRateLimitError:
+                        logger.warning(
+                            f"⚠️ Rate limit on {domain_name} — waiting 60s before retry..."
+                        )
+                        await asyncio.sleep(60)  # Wait for token refill
+                        try:
+                            deals = await self.keepa_client.get_products_with_deals(
+                                asins=batch,
+                                domain_id=domain_id,
+                                min_discount=10,
+                            )
+                            all_deals.extend(deals)
+                            if deals:
+                                logger.info(
+                                    f"  → {domain_name}: {len(deals)} deals after wait"
+                                )
+                        except KeepaRateLimitError:
+                            logger.error(
+                                f"Still rate limited after wait — skipping domain {domain_name}"
+                            )
+                            continue
+                        else:
+                            for d in deals:
+                                d["layout"] = self._detect_layout(
+                                    d.get("title", ""), d.get("domain", "")
+                                )
+                    except Exception as e:
+                        logger.warning(f"  → {domain_name} batch error: {e}")
+
+            # Filter: keyboard evidence
+            keyboard_deals = [
+                d
+                for d in all_deals
+                if any(kw in (d.get("title") or "").lower() for kw in KEYBOARD_KEYWORDS)
+            ]
+            valid_deals = keyboard_deals if keyboard_deals else all_deals
+
+            # Count by domain
+            domain_counts: dict[str, int] = {}
+            for d in valid_deals:
+                dom = d.get("domain", "?")
+                domain_counts[dom] = domain_counts.get(dom, 0) + 1
+
+            job_time = datetime.now(timezone.utc).strftime("%H:%M")
+
+            logger.info(
+                f"   asins_processed={asins_processed} "
+                f"valid_deals_found={len(valid_deals)} "
+                f"keyboard={len(keyboard_deals)}"
+            )
+
+            if not valid_deals:
+                logger.info("No deals found this cycle — nothing to index")
+                return
+
+            # Index to Elasticsearch
+            result = await self.elasticsearch_service.index_deals(valid_deals)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            es_indexed = result.get("indexed", 0)
+
+            if result["success"]:
+                logger.info(
+                    f"✅ [{job_time} UTC] "
+                    + " ".join(f"{d}:{c}" for d, c in domain_counts.items())
+                    + f" | total:{len(valid_deals)} es_indexed:{es_indexed}"
+                    + f" | {duration:.1f}s"
+                )
+            else:
+                logger.error(f"❌ ES index failed: {result.get('error')}")
+
+            # Phase 3: Calculate arbitrage after every successful collection
+            await self._calculate_arbitrage()
+
+            # Kafka: publish raw deals (fire-and-forget — ES is primary sink)
+            try:
+                from src.services.kafka_producer import KeepaKafkaProducer
+
+                _producer = KeepaKafkaProducer(self.settings.kafka_bootstrap_servers)
+                await _producer.start()
+                published = await _producer.publish_deals(valid_deals)
+                await _producer.stop()
+                logger.info(f"📨 Kafka: {published} deals → keepa-raw-deals")
+            except Exception as e:
+                logger.warning(f"Kafka publish skipped (Kafka not available): {e}")
+
+        except Exception as e:
+            logger.error(f"❌ Collection job failed: {e}", exc_info=True)
+
+    async def _calculate_arbitrage(self):
+        """
+        Phase 3: Cross-market arbitrage engine.
+        Reads all deals from keepa-deals, finds ASIN pairs where margin > 15€ after shipping.
+        Indexes results into keepa-arbitrage.
+        """
+        SHIPPING: dict[tuple, float] = {
+            ("IT", "DE"): 6.0,
+            ("ES", "DE"): 10.0,
+            ("FR", "DE"): 7.0,
+            ("UK", "DE"): 9.0,
+            ("IT", "ES"): 8.0,
+            ("FR", "ES"): 8.0,
+            ("IT", "FR"): 7.0,
+            ("UK", "FR"): 8.0,
+            ("UK", "IT"): 9.0,
+            ("ES", "FR"): 8.0,
+        }
+        MIN_MARGIN = 15.0
+
+        try:
+            response = await self.elasticsearch_service.client.search(
+                index=self.elasticsearch_service.INDEX_NAME,
+                body={
+                    "size": 1000,
+                    "query": {
+                        "bool": {"filter": [{"exists": {"field": "current_price"}}]}
+                    },
+                    "_source": ["asin", "title", "domain", "current_price", "layout"],
+                },
+            )
+            hits = response.get("hits", {}).get("hits", [])
+            if not hits:
+                return
+
+            # Group by ASIN — only keep entries with a price
+            by_asin: dict[str, list] = {}
+            for h in hits:
+                s = h["_source"]
+                asin = s.get("asin")
+                if asin and s.get("current_price"):
+                    by_asin.setdefault(asin, []).append(s)
+
+            opportunities = []
+            for asin, entries in by_asin.items():
+                if len(entries) < 2:
+                    continue
+                entries_sorted = sorted(entries, key=lambda x: x["current_price"])
+                cheapest = entries_sorted[0]
+                for sell_entry in entries_sorted[1:]:
+                    buy_dom = cheapest["domain"]
+                    sell_dom = sell_entry["domain"]
+                    buy_price = cheapest["current_price"]
+                    sell_price = sell_entry["current_price"]
+                    shipping = SHIPPING.get(
+                        (buy_dom, sell_dom),
+                        SHIPPING.get((sell_dom, buy_dom), 10.0),
+                    )
+                    margin = sell_price - buy_price - shipping
+                    if margin >= MIN_MARGIN:
+                        margin_pct = (sell_price - buy_price) / buy_price * 100
+                        opportunities.append(
+                            {
+                                "asin": asin,
+                                "title": cheapest.get("title", ""),
+                                "buy_domain": buy_dom,
+                                "sell_domain": sell_dom,
+                                "buy_price": round(buy_price, 2),
+                                "sell_price": round(sell_price, 2),
+                                "margin_eur": round(margin, 2),
+                                "margin_pct": round(margin_pct, 1),
+                                "shipping_cost": shipping,
+                                "layout": cheapest.get("layout", "Unknown"),
+                            }
+                        )
+
+            if opportunities:
+                result = await self.elasticsearch_service.index_arbitrage(opportunities)
+                logger.info(
+                    f"🏆 Arbitrage: {len(opportunities)} opportunities "
+                    f"(errors: {result.get('errors', 0)})"
+                )
+                top3 = sorted(
+                    opportunities, key=lambda x: x["margin_eur"], reverse=True
+                )[:3]
+                for opp in top3:
+                    logger.info(
+                        f"   💰 {opp['asin']} | {opp['buy_domain']}→{opp['sell_domain']}"
+                        f" | +{opp['margin_eur']:.1f}€ ({opp['margin_pct']:.0f}%)"
+                        f" | {opp['layout']}"
+                    )
+            else:
+                logger.info("📊 Arbitrage: no opportunities ≥ 15€ margin this cycle")
+
+        except Exception as e:
+            logger.warning(f"Arbitrage calculation skipped: {e}")
+
 
 class DealScheduler:
     """
@@ -321,8 +784,11 @@ class DealScheduler:
         # For production, use SQLAlchemyJobStore with PostgreSQL
         jobstores = {"default": MemoryJobStore()}
 
-        # Executors
-        executors = {"default": ThreadPoolExecutor(max_workers=10)}
+        # Executors — asyncio for async jobs, thread pool for sync jobs
+        executors = {
+            "default": AsyncIOExecutor(),
+            "threadpool": ThreadPoolExecutor(max_workers=10),
+        }
 
         # Job defaults
         job_defaults = {
@@ -349,7 +815,22 @@ class DealScheduler:
             misfire_grace_time=3600,
         )
 
-        logger.info("✅ Scheduler configured for daily @ 06:00 UTC")
+        # Add configurable interval job for Elasticsearch indexing
+        interval_secs = self.settings.deal_scan_interval_seconds
+        self.scheduler.add_job(
+            func=self.orchestrator._collect_to_elasticsearch,
+            trigger=IntervalTrigger(seconds=interval_secs, timezone="UTC"),
+            id="elasticsearch_collection",
+            name=f"Elasticsearch Deal Collection ({interval_secs}s)",
+            replace_existing=True,
+            misfire_grace_time=interval_secs,
+        )
+
+        logger.info(
+            f"✅ Scheduler configured for daily @ 06:00 UTC "
+            f"+ deal collector every {interval_secs}s "
+            f"(batch_size={self.settings.deal_scan_batch_size})"
+        )
 
         return self.scheduler
 

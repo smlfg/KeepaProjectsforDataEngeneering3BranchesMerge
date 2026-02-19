@@ -6,6 +6,7 @@ Test script for Keepa API connection and Deal Scoring
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 from decimal import Decimal
 
 # Add src to path
@@ -15,6 +16,7 @@ from src.services.keepa_client import get_keepa_client
 from src.services.deal_scoring import get_deal_scoring_service
 
 
+@pytest.mark.asyncio
 async def test_keepa_api():
     """Test Keepa API connection"""
     print("=" * 60)

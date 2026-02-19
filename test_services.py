@@ -6,6 +6,7 @@ Test script for Report Generator and Email Sender services
 import asyncio
 import sys
 from pathlib import Path
+import pytest
 from decimal import Decimal
 from uuid import uuid4
 
@@ -99,6 +100,7 @@ def test_report_generator():
     return result
 
 
+@pytest.mark.asyncio
 async def test_email_sender():
     """Test email sending (mock)"""
     print("\n" + "=" * 60)

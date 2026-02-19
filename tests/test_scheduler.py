@@ -286,6 +286,7 @@ class TestManualTrigger:
 
     def test_manual_trigger_endpoint(self):
         """POST /admin/trigger-daily-reports works"""
+        pytest.importorskip("fastapi", reason="fastapi not installed")
         from src.api.main import app
         from fastapi.testclient import TestClient
 

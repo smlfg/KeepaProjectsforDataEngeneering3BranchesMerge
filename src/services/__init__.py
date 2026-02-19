@@ -7,6 +7,7 @@ from src.services.keepa_client import (
     KeepaRateLimitError,
     KeepaAuthError,
     KeepaTimeoutError,
+    NoDealAccessError,
 )
 from src.services.deal_scoring import (
     DealScoringService,
@@ -21,6 +22,11 @@ from src.services.email_sender import (
     EmailAuthError,
     EmailRateLimitError,
     EmailSMTPError,
+)
+from src.services.elasticsearch_service import (
+    ElasticsearchService,
+    get_elasticsearch_service,
+    close_elasticsearch_service,
 )
 
 __all__ = [
@@ -42,4 +48,7 @@ __all__ = [
     "EmailAuthError",
     "EmailRateLimitError",
     "EmailSMTPError",
+    "ElasticsearchService",
+    "get_elasticsearch_service",
+    "close_elasticsearch_service",
 ]

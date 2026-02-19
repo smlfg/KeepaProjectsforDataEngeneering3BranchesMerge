@@ -4,6 +4,7 @@ Handles all interactions with Keepa API
 """
 
 import hashlib
+import logging
 import time
 from datetime import datetime
 from decimal import Decimal
@@ -22,6 +23,8 @@ from src.config import get_keepa_api_key
 
 
 KEEPA_API_BASE = "https://api.keepa.com"
+
+logger = logging.getLogger("keepa_client")
 
 
 class KeepaApiError(Exception):
@@ -48,6 +51,12 @@ class KeepaTimeoutError(KeepaApiError):
     pass
 
 
+class NoDealAccessError(KeepaApiError):
+    """Deals endpoint not available on this API plan (404)"""
+
+    pass
+
+
 class KeepaClient:
     """
     Client for Keepa API
@@ -65,7 +74,7 @@ class KeepaClient:
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
     async def _make_request(
-        self, endpoint: str, params: dict, timeout: float = 30.0
+        self, endpoint: str, params: dict, timeout: float = 30.0, method: str = "GET"
     ) -> dict:
         """
         Make API request with retry logic
@@ -74,7 +83,10 @@ class KeepaClient:
         url = f"{KEEPA_API_BASE}/{endpoint}"
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(url, params=params)
+            if method == "POST":
+                response = await client.post(url, data=params)
+            else:
+                response = await client.get(url, params=params)
 
             # Update rate limit info from response headers
             self.rate_limit_remaining = int(
@@ -90,6 +102,11 @@ class KeepaClient:
 
             elif response.status_code == 429:
                 raise KeepaRateLimitError("Keepa API rate limit exceeded")
+
+            elif response.status_code == 404:
+                raise NoDealAccessError(
+                    f"Keepa endpoint not available on this plan (404)"
+                )
 
             elif response.status_code == 504:
                 raise KeepaTimeoutError("Keepa API timeout")
@@ -127,7 +144,8 @@ class KeepaClient:
         params = {
             "key": self.api_key,
             "domain": domain_id,
-            "search": search_term,
+            "type": 0,
+            "term": search_term,
             "page": page,
         }
 
@@ -204,6 +222,189 @@ class KeepaClient:
 
         except KeepaApiError as e:
             raise KeepaApiError(f"Product fetch failed: {str(e)}")
+
+    async def get_deals(
+        self,
+        domain_id: int = 3,
+        min_discount: int = 10,
+        limit: int = 50,
+        price_types: list = None,
+        include_categories: list = None,
+    ) -> list[dict]:
+        """
+        Fetch current deals from Keepa Deals API.
+
+        priceTypes: 0=Amazon, 1=New 3rd party, 2=Used/WHD, 10=Collectible, 11=Refurbished
+        Amazon WHD = priceType 2
+
+        Args:
+            domain_id: Amazon domain (1=com, 3=de, 4=fr, 8=it, 9=es, 14=nl)
+            min_discount: Minimum discount percentage
+            limit: Max number of deals to return
+            price_types: Keepa price types to include
+            include_categories: Keepa category IDs to filter by
+
+        Returns:
+            List of deal dicts with asin, title, price, discount etc.
+        """
+        domain_names = {3: "DE", 4: "FR", 8: "IT", 9: "ES", 14: "NL", 2: "UK", 1: "US"}
+
+        params = {"key": self.api_key, "domain": domain_id, "page": 0}
+
+        try:
+            response = await self._make_request("deals", params)
+            domain_name = domain_names.get(domain_id, str(domain_id))
+            tokens = response.get("tokensConsumed", 0)
+            logger.debug(f"Keepa API tokens consumed for {domain_name}: {tokens}")
+            items = (
+                response if isinstance(response, list) else response.get("deals", [])
+            )
+            deals = []
+            for item in items:
+                deals.append(
+                    {
+                        "asin": item.get("asin"),
+                        "title": item.get("title"),
+                        "current_price": item.get("current", 0) / 100
+                        if item.get("current")
+                        else None,
+                        "list_price": item.get("avg90", 0) / 100
+                        if item.get("avg90")
+                        else None,
+                        "discount_percent": item.get("deltaPercent"),
+                        "rating": item.get("rating", 0) / 10
+                        if item.get("rating")
+                        else None,
+                        "reviews": item.get("reviews"),
+                        "domain": domain_name,
+                    }
+                )
+            return deals
+
+        except NoDealAccessError:
+            raise
+        except KeepaApiError as e:
+            raise KeepaApiError(f"Deals fetch failed: {str(e)}")
+
+    @staticmethod
+    def _get_latest_price(csv_array) -> Optional[float]:
+        """Extract the latest price from a Keepa CSV price history array.
+
+        Keepa CSV format: [timestamp1, price1, timestamp2, price2, ...]
+        Latest price = last element. Prices are integers (divide by 100 for EUR).
+        -1 means price unavailable.
+        """
+        if not csv_array or len(csv_array) < 2:
+            return None
+        price_int = csv_array[-1]
+        if price_int == -1:
+            return None
+        return price_int / 100.0
+
+    async def get_products_with_deals(
+        self,
+        asins: list[str],
+        domain_id: int = 3,
+        min_discount: int = 10,
+    ) -> list[dict]:
+        """
+        Fetch products from /product endpoint and find WHD/Used deals via price heuristic.
+
+        CSV indices:
+          csv[0] = Amazon price history
+          csv[2] = Used/Marketplace price history
+          csv[9] = Warehouse Deal (WHD) price history
+
+        Args:
+            asins: List of ASINs to check (max 100 per call recommended)
+            domain_id: Amazon domain (3=DE, 4=FR, 8=IT, 9=ES, 14=NL)
+            min_discount: Minimum discount % to qualify as a deal
+
+        Returns:
+            List of deals with snake_case fields and source="product_heuristic"
+        """
+        domain_names = {3: "DE", 4: "FR", 8: "IT", 9: "ES", 14: "NL", 2: "UK", 1: "US"}
+        domain_name = domain_names.get(domain_id, str(domain_id))
+
+        params = {
+            "key": self.api_key,
+            "domain": domain_id,
+            "asin": ",".join(asins),
+        }
+
+        try:
+            response = await self._make_request("product", params)
+            tokens = response.get("tokensConsumed", 0)
+            logger.debug(
+                f"Keepa /product {domain_name}: {len(asins)} ASINs, {tokens} tokens"
+            )
+
+            products = response.get("products", [])
+            deals = []
+
+            for product in products:
+                try:
+                    asin = product.get("asin")
+                    title = product.get("title") or f"Product {asin}"
+                    csv_data = product.get("csv") or []
+
+                    amazon_price = self._get_latest_price(
+                        csv_data[0] if len(csv_data) > 0 else None
+                    )
+                    new_price = self._get_latest_price(
+                        csv_data[1] if len(csv_data) > 1 else None
+                    )
+                    used_price = self._get_latest_price(
+                        csv_data[2] if len(csv_data) > 2 else None
+                    )
+                    whd_price = self._get_latest_price(
+                        csv_data[9] if len(csv_data) > 9 else None
+                    )
+
+                    # Use new price as fallback reference when Amazon price is unavailable
+                    list_price = amazon_price or new_price
+
+                    # Pick best deal price (WHD preferred over Used)
+                    deal_price = None
+                    deal_type = None
+                    if whd_price is not None:
+                        deal_price = whd_price
+                        deal_type = "WHD"
+                    elif used_price is not None:
+                        deal_price = used_price
+                        deal_type = "Used"
+
+                    if deal_price is None or list_price is None or list_price <= 0:
+                        continue
+
+                    discount_pct = int((1 - deal_price / list_price) * 100)
+                    if discount_pct < min_discount:
+                        continue
+
+                    rating_raw = product.get("rating", 0)
+                    deals.append({
+                        "asin": asin,
+                        "title": title,
+                        "current_price": deal_price,
+                        "list_price": list_price,
+                        "discount_percent": discount_pct,
+                        "rating": rating_raw / 10.0 if rating_raw else None,
+                        "reviews": product.get("reviewCount"),
+                        "domain": domain_name,
+                        "deal_type": deal_type,
+                        "source": "product_heuristic",
+                    })
+
+                except Exception as e:
+                    logger.warning(f"Skipping ASIN {product.get('asin')}: {e}")
+                    continue
+
+            return deals
+
+        except NoDealAccessError:
+            raise
+        except KeepaApiError as e:
+            raise KeepaApiError(f"Product deal fetch failed: {str(e)}")
 
     def parse_products(self, raw_response: dict) -> list[dict]:
         """

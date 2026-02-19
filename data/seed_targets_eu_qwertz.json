@@ -1,0 +1,198 @@
+{
+  "_meta": {
+    "generated_at": "2026-02-19T04:01:47.590906+00:00",
+    "domains": [
+      "UK",
+      "FR",
+      "IT",
+      "ES"
+    ],
+    "total": 13,
+    "stats": {
+      "tokens": 432,
+      "found": 13,
+      "errors": 0
+    }
+  },
+  "by_domain": {
+    "UK": [
+      {
+        "asin": "B003ELVLKU",
+        "domain": "UK",
+        "domain_id": 2,
+        "title": "LOGITECH 920-002479 KEYBOARD K120 FOR BUSINESS US INT L LAYOUT US - (Keyboards > Keyboards)",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T01:34:15.977799+00:00"
+      },
+      {
+        "asin": "B014EUQOGK",
+        "domain": "UK",
+        "domain_id": 2,
+        "title": "Logitech K400 Plus - keyboards (RF Wireless, Universal, QWERTY, Wireless, Black, HTPC)",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T01:34:15.977837+00:00"
+      },
+      {
+        "asin": "B01E8KO2B0",
+        "domain": "UK",
+        "domain_id": 2,
+        "title": "Qisan Mechanical Keyboard Gaming Keyboard Brown Switch 68-Keys Mini Design (60%) Gaming Wired Keyboard White Silver Magicforce by",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T01:34:15.977847+00:00"
+      },
+      {
+        "asin": "B01NABDNPH",
+        "domain": "UK",
+        "domain_id": 2,
+        "title": "Apple Wireless Magic Keyboard 2, - Silver (Renewed)",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T01:34:18.736659+00:00"
+      }
+    ],
+    "FR": [
+      {
+        "asin": "B014EUQOGK",
+        "domain": "FR",
+        "domain_id": 4,
+        "title": "Logitech K400 Plus Keyboard, US/int Wireless Touch, 920-007119 (Wireless Touch)",
+        "new_price": 91.0,
+        "used_price": null,
+        "list_price": 91.0,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:10.330723+00:00"
+      },
+      {
+        "asin": "B01NABDNPH",
+        "domain": "FR",
+        "domain_id": 4,
+        "title": "Apple Clavier magique sans fil 2, Silver (Refurbished)",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:13.939849+00:00"
+      }
+    ],
+    "IT": [
+      {
+        "asin": "B014EUQOGK",
+        "domain": "IT",
+        "domain_id": 8,
+        "title": "Logitech K400 Plus Keyboard",
+        "new_price": 112.03,
+        "used_price": 45.83,
+        "list_price": 112.03,
+        "discount_percent": 59.1,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:25.504879+00:00"
+      },
+      {
+        "asin": "B01E8KO2B0",
+        "domain": "IT",
+        "domain_id": 8,
+        "title": "Qisan Tastiera meccanica Tastiera da gioco Interruttore Marrone 68 tasti Mini Design (60%) Tastiera da gioco cablata Bianco Magicforce",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:25.504900+00:00"
+      },
+      {
+        "asin": "B01NABDNPH",
+        "domain": "IT",
+        "domain_id": 8,
+        "title": "Apple Tastiera senza fili magico 2, argento certificato rinnovato",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:28.392365+00:00"
+      }
+    ],
+    "ES": [
+      {
+        "asin": "B003ELVLKU",
+        "domain": "ES",
+        "domain_id": 9,
+        "title": "Logitech Keyboard K120 - Spill-Resistant Durable Design",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:37.086911+00:00"
+      },
+      {
+        "asin": "B014EUQOGK",
+        "domain": "ES",
+        "domain_id": 9,
+        "title": "Logitech K400 Plus Keyboard",
+        "new_price": 65.0,
+        "used_price": 45.83,
+        "list_price": 65.0,
+        "discount_percent": 29.5,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:37.086949+00:00"
+      },
+      {
+        "asin": "B01E8KO2B0",
+        "domain": "ES",
+        "domain_id": 9,
+        "title": "Qisan Teclado mec\u00e1nico teclado para juegos con interruptor marr\u00f3n 68 teclas Mini dise\u00f1o (60%) teclado con cable para juegos blanco plateado Magicforce",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:37.086959+00:00"
+      },
+      {
+        "asin": "B01NABDNPH",
+        "domain": "ES",
+        "domain_id": 9,
+        "title": "Apple Wireless Magic Keyboard 2, - (Refurbished) Silver",
+        "new_price": null,
+        "used_price": null,
+        "list_price": null,
+        "discount_percent": null,
+        "rating": null,
+        "validated_at": "2026-02-19T04:01:40.039707+00:00"
+      }
+    ]
+  },
+  "all_asins": [
+    "B003ELVLKU",
+    "B014EUQOGK",
+    "B01E8KO2B0",
+    "B01NABDNPH",
+    "B014EUQOGK",
+    "B01NABDNPH",
+    "B014EUQOGK",
+    "B01E8KO2B0",
+    "B01NABDNPH",
+    "B003ELVLKU",
+    "B014EUQOGK",
+    "B01E8KO2B0",
+    "B01NABDNPH"
+  ]
+}

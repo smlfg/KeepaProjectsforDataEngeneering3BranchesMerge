@@ -1,0 +1,13 @@
+{
+  "started_at": "",
+  "updated_at": "",
+  "processed_keys": [],
+  "stats": {
+    "batches": 0,
+    "requests": 0,
+    "rate_limits": 0,
+    "errors": 0,
+    "validated_rows": 0,
+    "tokens_consumed": 0
+  }
+}

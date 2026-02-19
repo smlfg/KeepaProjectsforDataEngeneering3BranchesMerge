@@ -37,6 +37,31 @@ class Settings(BaseSettings):
         default="amqp://localhost:5672/", validation_alias="RABBITMQ_URL"
     )
 
+    # Deal scanning
+    deal_scan_interval_seconds: int = Field(
+        default=300, validation_alias="DEAL_SCAN_INTERVAL_SECONDS"
+    )
+    deal_scan_batch_size: int = Field(
+        default=50, validation_alias="DEAL_SCAN_BATCH_SIZE"
+    )
+    deal_source_mode: str = Field(
+        default="product_only", validation_alias="DEAL_SOURCE_MODE"
+    )
+    deal_seed_asins: str = Field(default="", validation_alias="DEAL_SEED_ASINS")
+    deal_targets_file: str = Field(
+        default="data/seed_targets_core_qwertz.csv",
+        validation_alias="DEAL_TARGETS_FILE",
+    )
+    deal_seed_file: str = Field(
+        default="data/seed_asins_eu_qwertz.json",
+        validation_alias="DEAL_SEED_FILE",
+    )
+
+    kafka_bootstrap_servers: str = Field(
+        default="localhost:9092",
+        validation_alias="KAFKA_BOOTSTRAP_SERVERS",
+    )
+
     # Email
     sendgrid_api_key: Optional[str] = Field(
         default=None, validation_alias="SENDGRID_API_KEY"

@@ -1,0 +1,92 @@
+# docker-compose.cluster.yml — 3-Node ES + 3-Broker Kafka Demo
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.cluster.yml up
+version: "3.8"
+
+services:
+  elasticsearch:
+    environment:
+      - node.name=es01
+      - cluster.name=keepa-cluster
+      - cluster.initial_master_nodes=es01,es02,es03
+      - discovery.seed_hosts=es02,es03
+      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+
+  es02:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    restart: always
+    environment:
+      - node.name=es02
+      - cluster.name=keepa-cluster
+      - cluster.initial_master_nodes=es01,es02,es03
+      - discovery.seed_hosts=elasticsearch,es03
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+    mem_limit: 512m
+    volumes:
+      - esdata2:/usr/share/elasticsearch/data
+
+  es03:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    restart: always
+    environment:
+      - node.name=es03
+      - cluster.name=keepa-cluster
+      - cluster.initial_master_nodes=es01,es02,es03
+      - discovery.seed_hosts=elasticsearch,es02
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+    mem_limit: 512m
+    volumes:
+      - esdata3:/usr/share/elasticsearch/data
+
+  kafka:
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093,2@kafka2:9093,3@kafka3:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+
+  kafka2:
+    image: apache/kafka:3.7.0
+    restart: always
+    ports:
+      - "9093:9092"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093,2@kafka2:9093,3@kafka3:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: keepa-cluster-01
+    mem_limit: 384m
+    volumes:
+      - kafkadata2:/var/lib/kafka/data
+
+  kafka3:
+    image: apache/kafka:3.7.0
+    restart: always
+    ports:
+      - "9094:9092"
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093,2@kafka2:9093,3@kafka3:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: keepa-cluster-01
+    mem_limit: 384m
+    volumes:
+      - kafkadata3:/var/lib/kafka/data
+
+volumes:
+  esdata2:
+  esdata3:
+  kafkadata2:
+  kafkadata3:
