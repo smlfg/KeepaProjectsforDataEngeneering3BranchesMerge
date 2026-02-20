@@ -144,7 +144,8 @@ class ElasticsearchService:
             for deal in deals:
                 asin = deal.get("asin")
                 domain = deal.get("domain", "XX")
-                doc_id = f"{asin}_{domain}" if asin else f"unknown_{domain}_{timestamp}"
+                # Let ES auto-generate unique IDs for new documents
+                doc_id = None
 
                 doc = {
                     "asin": deal.get("asin"),
@@ -177,11 +178,9 @@ class ElasticsearchService:
                 }
 
                 action = {
-                    "_op_type": "update",
+                    "_op_type": "index",
                     "_index": self.INDEX_NAME,
                     "_id": doc_id,
-                    "doc": doc,
-                    "doc_as_upsert": True,
                 }
                 actions.append(action)
 

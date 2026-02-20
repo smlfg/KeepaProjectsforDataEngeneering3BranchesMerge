@@ -7,6 +7,7 @@ import asyncio
 import csv
 import json
 import logging
+import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -65,6 +66,11 @@ class DealOrchestrator:
         self.report_generator = get_report_generator()
         self.email_sender = get_email_sender()
         self.elasticsearch_service = get_elasticsearch_service()
+
+        # Seed file tracking for hot-reload
+        self._last_seed_mtime: float = 0.0
+        self._cached_targets: list[dict] = []
+        self._initial_load_done: bool = False
 
         # Stats tracking
         self.stats = {
@@ -381,6 +387,8 @@ class DealOrchestrator:
           3. DEAL_SEED_FILE JSON   (by_domain format → expanded to target list)
           4. hardcoded minimal defaults
         Returns list of {"asin": str, "domain_id": int, "market": str}
+
+        Auto-reloads when seed file changes (detected via mtime).
         """
         DOMAIN_EU = {"UK": 2, "DE": 3, "FR": 4, "IT": 8, "ES": 9, "AT": 16}
         settings = get_settings()
@@ -388,6 +396,17 @@ class DealOrchestrator:
 
         # Priority 1 – CSV targets file (domain-aware)
         csv_path = root / settings.deal_targets_file
+
+        # Check if seed file has been updated since last load
+        if csv_path.exists():
+            current_mtime = os.path.getmtime(csv_path)
+            if self._cached_targets and current_mtime == self._last_seed_mtime:
+                # File unchanged - return cached targets
+                return self._cached_targets
+            if current_mtime > self._last_seed_mtime:
+                # File has been updated - clear cache to force reload
+                self._cached_targets = []
+                logger.info(f"Seed file updated, will reload targets")
         loaded_targets = []
         validated_count = 0
         domain_counts: dict[int, int] = {}
@@ -490,6 +509,16 @@ class DealOrchestrator:
             logger.info(f"➕ Added {len(fallback_de_asins)} fallback DE targets")
 
         if loaded_targets:
+            # Cache targets and update modification time
+            if csv_path.exists():
+                self._last_seed_mtime = os.path.getmtime(csv_path)
+            self._cached_targets = loaded_targets
+            if not hasattr(self, "_initial_load_done") or not self._initial_load_done:
+                self._initial_load_done = True
+            else:
+                logger.info(
+                    f"Reloaded {len(loaded_targets)} ASINs from updated seed file"
+                )
             log_targets(domain_counts)
             return loaded_targets
 
