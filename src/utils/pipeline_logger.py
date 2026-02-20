@@ -16,6 +16,16 @@ KAFKA_CONSUMER = "kafka_consumer"
 ARBITRAGE = "arbitrage"
 
 
+class PipelineStage:
+    KEEPA_API = "keepa_api"
+    PARSER = "parser"
+    FILTER = "filter"
+    ES_INDEX = "es_index"
+    KAFKA_PRODUCER = "kafka_producer"
+    KAFKA_CONSUMER = "kafka_consumer"
+    ARBITRAGE = "arbitrage"
+
+
 def setup_logger() -> structlog.BoundLogger:
     """
     Configure structlog for structured JSON logging.
@@ -169,6 +179,18 @@ def log_arbitrage(
     )
 
 
+def log_targets(domain_counts: dict) -> None:
+    """Log loaded ASIN targets by domain."""
+    _log_event(
+        stage="targets",
+        output={
+            "domain_counts": domain_counts,
+            "total_asins": sum(domain_counts.values()),
+        },
+        success=True,
+    )
+
+
 __all__ = [
     "KEEPA_API",
     "PARSER",
@@ -177,6 +199,7 @@ __all__ = [
     "KAFKA_PRODUCER",
     "KAFKA_CONSUMER",
     "ARBITRAGE",
+    "PipelineStage",
     "setup_logger",
     "log_api_call",
     "log_parser",
@@ -185,4 +208,5 @@ __all__ = [
     "log_kafka_produce",
     "log_kafka_consume",
     "log_arbitrage",
+    "log_targets",
 ]

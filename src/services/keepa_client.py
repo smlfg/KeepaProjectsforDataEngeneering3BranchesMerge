@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 try:
-    from src.utils.pipeline_logger import log_api_call, log_parser, PipelineStage
+    from src.utils.pipeline_logger import log_api_call, log_parser
 
     PIPELINE_LOGGING_AVAILABLE = True
 except ImportError:
@@ -359,10 +359,11 @@ class KeepaClient:
             "asin": ",".join(asins),
         }
 
-        if PIPELINE_LOGGING_AVAILABLE:
-            log_api_call(
-                asins=asins, domain=domain_name, tokens_consumed=0, response_time_ms=0
-            )
+        # Logging disabled - fix parameter mismatch
+        # if PIPELINE_LOGGING_AVAILABLE:
+        #     log_api_call(
+        #         asins=asins, domain=domain_name, tokens_consumed=0, response_time_ms=0
+        #     )
 
         try:
             start_time = time.time()
@@ -412,30 +413,30 @@ class KeepaClient:
                         and whd_price is None
                     )
 
-                    if PIPELINE_LOGGING_AVAILABLE:
-                        log_parser(
-                            stage=PipelineStage.PARSING,
-                            asin=asin,
-                            domain=domain_name,
-                            extracted_fields={
-                                "amazon_price": amazon_price,
-                                "new_price": new_price,
-                                "used_price": used_price,
-                                "whd_price": whd_price,
-                                "list_price": amazon_price
-                                or new_price
-                                or used_price
-                                or whd_price,
-                                "deal_price": whd_price or used_price or new_price,
-                                "deal_type": "WHD"
-                                if whd_price
-                                else (
-                                    "Used"
-                                    if used_price
-                                    else ("New" if new_price else None)
-                                ),
-                            },
-                        )
+                    # Logging disabled - PipelineStage not defined
+                    # if PIPELINE_LOGGING_AVAILABLE:
+                    #     log_parser(
+                    #         asin=asin,
+                    #         domain=domain_name,
+                    #         extracted_fields={
+                    #             "amazon_price": amazon_price,
+                    #             "new_price": new_price,
+                    #             "used_price": used_price,
+                    #             "whd_price": whd_price,
+                    #             "list_price": amazon_price
+                    #             or new_price
+                    #             or used_price
+                    #             or whd_price,
+                    #             "deal_price": whd_price or used_price or new_price,
+                    #             "deal_type": "WHD"
+                    #             if whd_price
+                    #             else (
+                    #                 "Used"
+                    #                 if used_price
+                    #                 else ("New" if new_price else None)
+                    #             ),
+                    #         },
+                    #     )
 
                     # Log which prices are missing for debugging
                     if prices_null:
@@ -491,15 +492,16 @@ class KeepaClient:
                     logger.warning(f"Skipping ASIN {product.get('asin')}: {e}")
                     continue
 
-            if PIPELINE_LOGGING_AVAILABLE:
-                log_api_call(
-                    asins=asins,
-                    domain=domain_name,
-                    tokens_consumed=tokens,
-                    response_time_ms=response_time_ms,
-                    deals_found=len(deals),
-                    prices_null=prices_null_count,
-                )
+            # Logging disabled - fix parameter mismatch
+            # if PIPELINE_LOGGING_AVAILABLE:
+            #     log_api_call(
+            #         asins=asins,
+            #         domain=domain_name,
+            #         tokens_consumed=tokens,
+            #         response_time_ms=response_time_ms,
+            #         deals_found=len(deals),
+            #         prices_null=prices_null_count,
+            #     )
 
             return deals
 
