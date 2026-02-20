@@ -33,6 +33,12 @@ from src.services.deal_scoring import get_deal_scoring_service
 from src.services.report_generator import get_report_generator
 from src.services.email_sender import get_email_sender
 from src.services.elasticsearch_service import get_elasticsearch_service
+from src.utils.pipeline_logger import (
+    log_filter,
+    log_es_index,
+    log_arbitrage,
+    log_targets,
+)
 
 
 # Configure logging
@@ -484,6 +490,7 @@ class DealOrchestrator:
             logger.info(f"➕ Added {len(fallback_de_asins)} fallback DE targets")
 
         if loaded_targets:
+            log_targets(domain_counts)
             return loaded_targets
 
         # Priority 2 – DEAL_SEED_ASINS env (expand to all 4 domains)
@@ -659,6 +666,16 @@ class DealOrchestrator:
                 for d in all_deals
                 if any(kw in (d.get("title") or "").lower() for kw in KEYBOARD_KEYWORDS)
             ]
+
+            # Log filter results for each deal
+            asins_in_keyboard = {d.get("asin") for d in keyboard_deals}
+            for d in all_deals:
+                asin = d.get("asin", "")
+                if asin in asins_in_keyboard:
+                    log_filter(asin=asin, filtered_in=True, reason="qwertz_keyword")
+                else:
+                    log_filter(asin=asin, filtered_in=False, reason="no_keyword_match")
+
             valid_deals = keyboard_deals if keyboard_deals else all_deals
 
             # Count by domain
@@ -683,6 +700,9 @@ class DealOrchestrator:
             result = await self.elasticsearch_service.index_deals(valid_deals)
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             es_indexed = result.get("indexed", 0)
+            es_errors = result.get("errors", 0)
+
+            log_es_index(indexed_count=es_indexed, errors=es_errors)
 
             if result["success"]:
                 logger.info(
@@ -790,6 +810,10 @@ class DealOrchestrator:
 
             if opportunities:
                 result = await self.elasticsearch_service.index_arbitrage(opportunities)
+                top_margin = max((o["margin_eur"] for o in opportunities), default=0.0)
+                log_arbitrage(
+                    opportunities_found=len(opportunities), top_margin_eur=top_margin
+                )
                 logger.info(
                     f"🏆 Arbitrage: {len(opportunities)} opportunities "
                     f"(errors: {result.get('errors', 0)})"
@@ -804,6 +828,7 @@ class DealOrchestrator:
                         f" | {opp['layout']}"
                     )
             else:
+                log_arbitrage(opportunities_found=0, top_margin_eur=0.0)
                 logger.info("📊 Arbitrage: no opportunities ≥ 15€ margin this cycle")
 
         except Exception as e:

@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 
 from aiokafka import AIOKafkaProducer
 
+from src.utils.pipeline_logger import log_kafka_produce, PipelineStage
+
 logger = logging.getLogger("kafka_producer")
 TOPIC = "keepa-raw-deals"
 
@@ -31,7 +33,23 @@ class KeepaKafkaProducer:
         """Publish deals to Kafka topic. Returns count published."""
         if not self._producer:
             return 0
+
+        log_kafka_produce(
+            stage=PipelineStage.EXTRACT,
+            topic=TOPIC,
+            message_count=len(deals),
+            before_send=True,
+        )
+
         for deal in deals:
             await self._producer.send(TOPIC, value=deal)
         await self._producer.flush()
+
+        log_kafka_produce(
+            stage=PipelineStage.EXTRACT,
+            topic=TOPIC,
+            message_count=len(deals),
+            before_send=False,
+        )
+
         return len(deals)

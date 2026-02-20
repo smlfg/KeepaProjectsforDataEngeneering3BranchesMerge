@@ -10,6 +10,29 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 from uuid import uuid4
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+try:
+    from src.utils.pipeline_logger import log_api_call, log_parser, PipelineStage
+
+    PIPELINE_LOGGING_AVAILABLE = True
+except ImportError:
+    PIPELINE_LOGGING_AVAILABLE = False
+
+    def log_api_call(*args, **kwargs):
+        pass
+
+    def log_parser(*args, **kwargs):
+        pass
+
+    class PipelineStage:
+        API_REQUEST = "api_request"
+        PARSING = "parsing"
+        FILTERING = "filtering"
+
 
 import httpx
 from tenacity import (
@@ -300,6 +323,8 @@ class KeepaClient:
             return None
         price_int = csv_array[-1]
         if price_int == -1:
+            if PIPELINE_LOGGING_AVAILABLE:
+                logger.debug("Price data unavailable (-1) for ASIN")
             return None
         return price_int / 100.0
 
@@ -334,15 +359,24 @@ class KeepaClient:
             "asin": ",".join(asins),
         }
 
+        if PIPELINE_LOGGING_AVAILABLE:
+            log_api_call(
+                asins=asins, domain=domain_name, tokens_consumed=0, response_time_ms=0
+            )
+
         try:
+            start_time = time.time()
             response = await self._make_request("product", params)
+            response_time_ms = int((time.time() - start_time) * 1000)
             tokens = response.get("tokensConsumed", 0)
+
             logger.debug(
                 f"Keepa /product {domain_name}: {len(asins)} ASINs, {tokens} tokens"
             )
 
             products = response.get("products", [])
             deals = []
+            prices_null_count = 0
 
             for product in products:
                 try:
@@ -371,13 +405,41 @@ class KeepaClient:
                         else None
                     )
 
-                    # Log which prices are missing for debugging
-                    if (
+                    prices_null = (
                         amazon_price is None
                         and new_price is None
                         and used_price is None
                         and whd_price is None
-                    ):
+                    )
+
+                    if PIPELINE_LOGGING_AVAILABLE:
+                        log_parser(
+                            stage=PipelineStage.PARSING,
+                            asin=asin,
+                            domain=domain_name,
+                            extracted_fields={
+                                "amazon_price": amazon_price,
+                                "new_price": new_price,
+                                "used_price": used_price,
+                                "whd_price": whd_price,
+                                "list_price": amazon_price
+                                or new_price
+                                or used_price
+                                or whd_price,
+                                "deal_price": whd_price or used_price or new_price,
+                                "deal_type": "WHD"
+                                if whd_price
+                                else (
+                                    "Used"
+                                    if used_price
+                                    else ("New" if new_price else None)
+                                ),
+                            },
+                        )
+
+                    # Log which prices are missing for debugging
+                    if prices_null:
+                        prices_null_count += 1
                         logger.debug(f"ASIN {asin}: No price data available from Keepa")
 
                     # Use new_price as primary fallback, then used_price, then whd_price
@@ -428,6 +490,16 @@ class KeepaClient:
                 except Exception as e:
                     logger.warning(f"Skipping ASIN {product.get('asin')}: {e}")
                     continue
+
+            if PIPELINE_LOGGING_AVAILABLE:
+                log_api_call(
+                    asins=asins,
+                    domain=domain_name,
+                    tokens_consumed=tokens,
+                    response_time_ms=response_time_ms,
+                    deals_found=len(deals),
+                    prices_null=prices_null_count,
+                )
 
             return deals
 

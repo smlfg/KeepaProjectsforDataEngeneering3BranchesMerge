@@ -10,6 +10,7 @@ from elasticsearch import AsyncElasticsearch
 from elasticsearch.helpers import async_bulk
 
 from src.config import get_settings
+from src.utils.pipeline_logger import log_es_index, PipelineStage
 
 logger = logging.getLogger("elasticsearch_service")
 
@@ -100,10 +101,17 @@ class ElasticsearchService:
         Returns:
             Dict with success status and statistics
         """
+        import time
+
+        start_time = time.time()
+
         try:
             if not deals:
                 logger.warning("No deals to index")
                 return {"success": True, "indexed": 0, "errors": 0}
+
+            deal_count = len(deals)
+            log_es_index(PipelineStage.ES_INDEX, input={"deal_count": deal_count})
 
             # Filter out deals with 0 or None prices before indexing
             original_count = len(deals)
@@ -191,6 +199,18 @@ class ElasticsearchService:
                 f"Indexed {success} deals to Elasticsearch (errors: {len(errors) if errors else 0})"
             )
 
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_es_index(
+                PipelineStage.ES_INDEX,
+                input={"deal_count": deal_count},
+                output={
+                    "indexed_success": True,
+                    "indexed_count": success,
+                    "errors": len(errors) if errors else 0,
+                },
+                duration_ms=duration_ms,
+            )
+
             return {
                 "success": True,
                 "indexed": success,
@@ -199,7 +219,15 @@ class ElasticsearchService:
             }
 
         except ConnectionError as e:
-            logger.warning("ES not reachable, skipping index")
+            logger.warning(f"ES not reachable: {e}")
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_es_index(
+                PipelineStage.ES_INDEX,
+                input={"deal_count": deal_count},
+                output={"indexed_success": False, "indexed_count": 0, "errors": 0},
+                duration_ms=duration_ms,
+                error=f"ES connection error: {e}",
+            )
             return {
                 "success": False,
                 "indexed": 0,
@@ -209,6 +237,18 @@ class ElasticsearchService:
 
         except Exception as e:
             logger.error(f"Error indexing deals: {e}")
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_es_index(
+                PipelineStage.ES_INDEX,
+                input={"deal_count": deal_count},
+                output={
+                    "indexed_success": False,
+                    "indexed_count": 0,
+                    "errors": deal_count,
+                },
+                duration_ms=duration_ms,
+                error=f"Indexing error: {e}",
+            )
             return {
                 "success": False,
                 "indexed": 0,
@@ -326,8 +366,16 @@ class ElasticsearchService:
         self, opportunities: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Bulk upsert arbitrage opportunities into keepa-arbitrage index."""
+        import time
+
+        start_time = time.time()
+
         if not opportunities:
             return {"success": True, "indexed": 0, "errors": 0}
+
+        opp_count = len(opportunities)
+        log_es_index(PipelineStage.ES_INDEX, input={"deal_count": opp_count})
+
         try:
             await self.create_arbitrage_index()
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -349,12 +397,32 @@ class ElasticsearchService:
                 raise_on_exception=False,
             )
             logger.info(f"Indexed {success} arbitrage opportunities")
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_es_index(
+                PipelineStage.ES_INDEX,
+                input={"deal_count": opp_count},
+                output={
+                    "indexed_success": True,
+                    "indexed_count": success,
+                    "errors": len(errors) if errors else 0,
+                },
+                duration_ms=duration_ms,
+            )
             return {
                 "success": True,
                 "indexed": success,
                 "errors": len(errors) if errors else 0,
             }
-        except ConnectionError:
+        except ConnectionError as e:
+            logger.warning(f"ES not reachable: {e}")
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_es_index(
+                PipelineStage.ES_INDEX,
+                input={"deal_count": opp_count},
+                output={"indexed_success": False, "indexed_count": 0, "errors": 0},
+                duration_ms=duration_ms,
+                error=f"ES connection error: {e}",
+            )
             return {
                 "success": False,
                 "indexed": 0,
@@ -363,6 +431,18 @@ class ElasticsearchService:
             }
         except Exception as e:
             logger.error(f"Error indexing arbitrage: {e}")
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_es_index(
+                PipelineStage.ES_INDEX,
+                input={"deal_count": opp_count},
+                output={
+                    "indexed_success": False,
+                    "indexed_count": 0,
+                    "errors": opp_count,
+                },
+                duration_ms=duration_ms,
+                error=f"Indexing error: {e}",
+            )
             return {
                 "success": False,
                 "indexed": 0,
