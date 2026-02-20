@@ -294,6 +294,8 @@ class KeepaClient:
         Latest price = last element. Prices are integers (divide by 100 for EUR).
         -1 means price unavailable.
         """
+        if csv_array is None:
+            return None
         if not csv_array or len(csv_array) < 2:
             return None
         price_int = csv_array[-1]
@@ -349,22 +351,39 @@ class KeepaClient:
                     csv_data = product.get("csv") or []
 
                     amazon_price = self._get_latest_price(
-                        csv_data[0] if len(csv_data) > 0 else None
+                        csv_data[0]
+                        if len(csv_data) > 0 and csv_data[0] is not None
+                        else None
                     )
                     new_price = self._get_latest_price(
-                        csv_data[1] if len(csv_data) > 1 else None
+                        csv_data[1]
+                        if len(csv_data) > 1 and csv_data[1] is not None
+                        else None
                     )
                     used_price = self._get_latest_price(
-                        csv_data[2] if len(csv_data) > 2 else None
+                        csv_data[2]
+                        if len(csv_data) > 2 and csv_data[2] is not None
+                        else None
                     )
                     whd_price = self._get_latest_price(
-                        csv_data[9] if len(csv_data) > 9 else None
+                        csv_data[9]
+                        if len(csv_data) > 9 and csv_data[9] is not None
+                        else None
                     )
 
-                    # Use new price as fallback reference when Amazon price is unavailable
-                    list_price = amazon_price or new_price
+                    # Log which prices are missing for debugging
+                    if (
+                        amazon_price is None
+                        and new_price is None
+                        and used_price is None
+                        and whd_price is None
+                    ):
+                        logger.debug(f"ASIN {asin}: No price data available from Keepa")
 
-                    # Pick best deal price (WHD preferred over Used)
+                    # Use new_price as primary fallback, then used_price, then whd_price
+                    list_price = amazon_price or new_price or used_price or whd_price
+
+                    # Pick best deal price (WHD preferred over Used, then Used)
                     deal_price = None
                     deal_type = None
                     if whd_price is not None:
@@ -373,8 +392,17 @@ class KeepaClient:
                     elif used_price is not None:
                         deal_price = used_price
                         deal_type = "Used"
+                    elif new_price is not None:
+                        deal_price = new_price
+                        deal_type = "New"
 
                     if deal_price is None or list_price is None or list_price <= 0:
+                        continue
+
+                    if deal_price <= 0:
+                        logger.debug(
+                            f"ASIN {asin}: Skipping - deal_price is 0 or negative: {deal_price}"
+                        )
                         continue
 
                     discount_pct = int((1 - deal_price / list_price) * 100)
@@ -382,18 +410,20 @@ class KeepaClient:
                         continue
 
                     rating_raw = product.get("rating", 0)
-                    deals.append({
-                        "asin": asin,
-                        "title": title,
-                        "current_price": deal_price,
-                        "list_price": list_price,
-                        "discount_percent": discount_pct,
-                        "rating": rating_raw / 10.0 if rating_raw else None,
-                        "reviews": product.get("reviewCount"),
-                        "domain": domain_name,
-                        "deal_type": deal_type,
-                        "source": "product_heuristic",
-                    })
+                    deals.append(
+                        {
+                            "asin": asin,
+                            "title": title,
+                            "current_price": deal_price,
+                            "list_price": list_price,
+                            "discount_percent": discount_pct,
+                            "rating": rating_raw / 10.0 if rating_raw else None,
+                            "reviews": product.get("reviewCount"),
+                            "domain": domain_name,
+                            "deal_type": deal_type,
+                            "source": "product_heuristic",
+                        }
+                    )
 
                 except Exception as e:
                     logger.warning(f"Skipping ASIN {product.get('asin')}: {e}")

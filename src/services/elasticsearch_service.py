@@ -105,6 +105,27 @@ class ElasticsearchService:
                 logger.warning("No deals to index")
                 return {"success": True, "indexed": 0, "errors": 0}
 
+            # Filter out deals with 0 or None prices before indexing
+            original_count = len(deals)
+            valid_deals = []
+            for deal in deals:
+                current_price = deal.get("current_price")
+                if current_price is not None and current_price > 0:
+                    valid_deals.append(deal)
+
+            filtered_count = original_count - len(valid_deals)
+            if filtered_count > 0:
+                logger.debug(
+                    f"Filtered out {filtered_count} deals with 0 or None prices "
+                    f"(original: {original_count}, valid: {len(valid_deals)})"
+                )
+
+            deals = valid_deals
+
+            if not deals:
+                logger.warning("No deals with valid prices to index")
+                return {"success": True, "indexed": 0, "errors": 0}
+
             # Ensure index exists
             await self.create_index()
 

@@ -248,7 +248,10 @@ class DealRepository:
     async def upsert(self, deal_data: dict) -> Deal:
         """Insert or update a deal"""
         asin = deal_data["asin"]
-        result = await self.session.execute(select(Deal).where(Deal.asin == asin))
+        domain = deal_data.get("domain", "DE")
+        result = await self.session.execute(
+            select(Deal).where(and_(Deal.asin == asin, Deal.domain == domain))
+        )
         existing = result.scalar_one_or_none()
 
         if existing:
@@ -265,9 +268,11 @@ class DealRepository:
             await self.session.flush()
             return deal
 
-    async def get_by_asin(self, asin: str) -> Optional[Deal]:
-        """Get deal by ASIN"""
-        result = await self.session.execute(select(Deal).where(Deal.asin == asin))
+    async def get_by_asin(self, asin: str, domain: str = "DE") -> Optional[Deal]:
+        """Get deal by ASIN and domain"""
+        result = await self.session.execute(
+            select(Deal).where(and_(Deal.asin == asin, Deal.domain == domain))
+        )
         return result.scalar_one_or_none()
 
     async def get_deals_for_filter(

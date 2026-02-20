@@ -109,7 +109,9 @@ class Deal(Base):
 
     __tablename__ = "deals"
 
-    asin = Column(String(10), primary_key=True)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    asin = Column(String(10), nullable=False)
+    domain = Column(String(10), nullable=False)
     title = Column(String(500), nullable=False)
     category = Column(String(100))
 
@@ -137,13 +139,15 @@ class Deal(Base):
         "DealSnapshot", back_populates="deal", cascade="all, delete-orphan"
     )
 
-    # Indexes
+    # Constraints - unique ASIN per domain
     __table_args__ = (
+        UniqueConstraint("asin", "domain", name="unique_asin_per_domain"),
         Index("idx_deals_rating", "rating"),
         Index("idx_deals_sales_rank", "sales_rank"),
         Index("idx_deals_discount", "discount_percent"),
         Index("idx_deals_category", "category"),
         Index("idx_deals_updated", "last_updated"),
+        Index("idx_deals_asin", "asin"),
     )
 
 
@@ -153,9 +157,8 @@ class DealSnapshot(Base):
     __tablename__ = "deal_snapshots"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    asin = Column(
-        String(10), ForeignKey("deals.asin", ondelete="CASCADE"), nullable=False
-    )
+    asin = Column(String(10), nullable=False)
+    domain = Column(String(10), nullable=False)
 
     # Deal Score
     deal_score = Column(Numeric(5, 2))
@@ -174,6 +177,7 @@ class DealSnapshot(Base):
 
     # Indexes
     __table_args__ = (
+        Index("idx_snapshots_asin_domain", "asin", "domain"),
         Index("idx_snapshots_asin_created", "asin", "created_at"),
         Index("idx_snapshots_score", "deal_score"),
     )

@@ -382,6 +382,10 @@ class DealOrchestrator:
 
         # Priority 1 – CSV targets file (domain-aware)
         csv_path = root / settings.deal_targets_file
+        loaded_targets = []
+        validated_count = 0
+        domain_counts: dict[int, int] = {}
+
         if csv_path.exists():
             try:
                 targets = []
@@ -413,6 +417,9 @@ class DealOrchestrator:
                                 "market": market,
                             }
                             targets.append(target)
+                            domain_counts[domain_id] = (
+                                domain_counts.get(domain_id, 0) + 1
+                            )
 
                             title = (row.get("title") or "").strip()
                             has_price = any(
@@ -426,27 +433,58 @@ class DealOrchestrator:
                             )
                             if title or has_price:
                                 validated_targets.append(target)
+                                validated_count += 1
 
                 if validated_targets:
                     logger.info(
                         f"🎯 Seed source: {settings.deal_targets_file} "
-                        f"({len(validated_targets)} validated targets)"
+                        f"({len(validated_targets)} validated targets, "
+                        f"domain_counts={dict(sorted(domain_counts.items()))})"
                     )
-                    return validated_targets
+                    loaded_targets = validated_targets
 
                 # If metadata columns exist but no row has title/price, treat file as raw/unvalidated.
-                if targets and has_metadata_columns:
+                elif targets and has_metadata_columns:
                     logger.warning(
                         f"⚠️  Ignoring raw target file {settings.deal_targets_file}: "
                         f"{len(targets)} rows but no validated title/price metadata."
                     )
+                    loaded_targets = targets
                 elif targets:
                     logger.info(
                         f"🎯 Seed source: {settings.deal_targets_file} ({len(targets)} targets)"
                     )
-                    return targets
+                    loaded_targets = targets
             except Exception as e:
                 logger.warning(f"Could not read targets CSV: {e}")
+
+        # Check if DE (domain_id=3) targets exist; if not, add fallback DE ASINs
+        de_count = domain_counts.get(3, 0)
+        if de_count == 0 and loaded_targets:
+            logger.warning(
+                f"⚠️  No DE (domain_id=3) targets found in {settings.deal_targets_file}. "
+                f"Found domains: {list(domain_counts.keys())}. "
+                f"Adding fallback DE QWERTZ ASINs to ensure DE deals are collected."
+            )
+            fallback_de_asins = [
+                "B08DG4C63H",  # Trust Taro - available in DE
+                "B00F35N1KS",  # CHERRY KC 1000
+                "B09N9CY637",  # CHERRY STREAM KEYBOARD TKL
+                "B08ZNSJ152",  # Dell KM5221W
+                "B003UL1RGC",  # Logitech K120
+            ]
+            for asin in fallback_de_asins:
+                loaded_targets.append(
+                    {
+                        "asin": asin,
+                        "domain_id": 3,  # DE
+                        "market": "DE",
+                    }
+                )
+            logger.info(f"➕ Added {len(fallback_de_asins)} fallback DE targets")
+
+        if loaded_targets:
+            return loaded_targets
 
         # Priority 2 – DEAL_SEED_ASINS env (expand to all 4 domains)
         if settings.deal_seed_asins:
@@ -578,6 +616,10 @@ class DealOrchestrator:
                             logger.info(
                                 f"  → {domain_name}: {len(deals)} deals "
                                 f"from {len(batch)} ASINs"
+                            )
+                        else:
+                            logger.debug(
+                                f"  → {domain_name}: 0 deals from {len(batch)} ASINs: {batch[:3]}..."
                             )
                     except NoDealAccessError as e:
                         logger.error(f"API plan limitation: {e}")
