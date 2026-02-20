@@ -86,6 +86,7 @@ def log_api_call(
     domain: str,
     tokens_consumed: int,
     response_time_ms: float,
+    **kwargs: Any,
 ) -> None:
     """Log Keepa API call."""
     _log_event(
@@ -129,14 +130,16 @@ def log_filter(
 
 def log_es_index(
     docs_indexed: int,
-    errors: list[str] | None = None,
+    errors: list[str] | int | None = None,
+    **kwargs: Any,
 ) -> None:
     """Log Elasticsearch index operations."""
+    error_count = errors if isinstance(errors, int) else (len(errors) if errors else 0)
     _log_event(
         stage=ES_INDEX,
         input={"docs_indexed": docs_indexed},
-        output={"errors": errors} if errors else None,
-        success=errors is None or len(errors) == 0,
+        output={"errors": error_count},
+        success=error_count == 0,
     )
 
 

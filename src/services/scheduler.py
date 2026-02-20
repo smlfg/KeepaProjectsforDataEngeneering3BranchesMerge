@@ -731,7 +731,7 @@ class DealOrchestrator:
             es_indexed = result.get("indexed", 0)
             es_errors = result.get("errors", 0)
 
-            log_es_index(indexed_count=es_indexed, errors=es_errors)
+            log_es_index(docs_indexed=es_indexed, errors=es_errors)
 
             if result["success"]:
                 logger.info(
